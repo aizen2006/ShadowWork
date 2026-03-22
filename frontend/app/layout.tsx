@@ -38,10 +38,10 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${bricolage.variable} ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <Script id="shadowwork-theme-init" strategy="beforeInteractive">
-        {`(function(){try{var t=localStorage.getItem("shadowwork-theme");var dark=t!=="light";document.documentElement.classList.toggle("dark",dark);}catch(e){document.documentElement.classList.add("dark");}})();`}
-      </Script>
       <body className="relative z-0 flex min-h-full flex-col bg-background text-text-primary">
+        <Script id="shadowwork-theme-init" strategy="beforeInteractive">
+          {`(function(){try{var t=localStorage.getItem("shadowwork-theme");var dark=t!=="light";document.documentElement.classList.toggle("dark",dark);}catch(e){document.documentElement.classList.add("dark");}})();`}
+        </Script>
         <ThemeProvider>
           <WalletProvider>
             <Navbar />
