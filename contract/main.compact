@@ -1,0 +1,143 @@
+pragma language_version 0.22;
+import CompactStandardLibrary;
+
+// -----------------------------------------------------------------------------
+// BountyManager — commit / reveal submissions, creator selects winner, claim.
+// Mirrors Battleship-style patterns: witnesses, persistentHash, disclose, Set,
+// Map, access control.
+//
+// Escrow: reward is stored as Uint<64> units on ledger; wire Midnight native
+// coin lock / transfer where marked TODO.
+// Deadline checks use witness localNow() — document trust model for production.
+// -----------------------------------------------------------------------------
+
+export enum BountyStatus {
+    OPEN,
+    CLOSED,
+    CLAIMED,
+}
+
+// Bounty id = H(creator_pk || nonce) — unique per create
+export ledger bountyCreator: Map<Bytes<32>, ZswapCoinPublicKey>;
+export ledger bountyReward: Map<Bytes<32>, Uint<64>>;
+export ledger bountyDeadline: Map<Bytes<32>, Uint<64>>;
+export ledger bountyStatus: Map<Bytes<32>, BountyStatus>;
+// Set only after selectWinner
+export ledger bountyWinner: Map<Bytes<32>, ZswapCoinPublicKey>;
+
+export ledger submissionCommits: Set<Bytes<32>>;
+export ledger revealedAttestations: Set<Bytes<32>>;
+export ledger lastCreatedBountyId: Bytes<32>;
+
+witness localSecret(): Bytes<32>;
+witness localNow(): Uint<64>;
+
+constructor() {}
+
+circuit commitBountyId(_creator: ZswapCoinPublicKey, _nonce: Bytes<32>): Bytes<32> {
+    return disclose(persistentHash<Vector<2, Bytes<32>>>([_creator as Bytes<32>, _nonce]));
+}
+
+circuit commitSubmissionRecord(
+    _bountyId: Bytes<32>,
+    _submitter: ZswapCoinPublicKey,
+    _submissionHash: Bytes<32>,
+): Bytes<32> {
+    return disclose(
+        persistentHash<Vector<3, Bytes<32>>>([_bountyId, _submitter as Bytes<32>, _submissionHash]),
+    );
+}
+
+circuit commitRevealTag(_bountyId: Bytes<32>, _submitter: ZswapCoinPublicKey): Bytes<32> {
+    return disclose(persistentHash<Vector<2, Bytes<32>>>([_bountyId, _submitter as Bytes<32>]));
+}
+
+circuit hashSolutionSecret(_solution: Bytes<32>, _secret: Bytes<32>): Bytes<32> {
+    return disclose(persistentHash<Vector<2, Bytes<32>>>([_solution, _secret]));
+}
+
+// -----------------------------------------------------------------------------
+// 1) createBounty — returns public bounty id bytes; TODO: lock coins
+// -----------------------------------------------------------------------------
+export circuit createBounty(_reward: Uint<64>, _deadline: Uint<64>): Bytes<32> {
+    assert(_reward > 0, "Reward must be positive");
+    assert(_deadline > 0, "Deadline required");
+    const now = disclose(localNow());
+    assert(_deadline > now, "Deadline must be in the future");
+
+    const nonce = localSecret();
+    const bid = commitBountyId(ownPublicKey(), nonce);
+
+    // TODO: lock _reward units from ownPublicKey() into contract escrow (Midnight coin API)
+
+    bountyCreator.insert(bid, ownPublicKey());
+    bountyReward.insert(bid, _reward);
+    bountyDeadline.insert(bid, _deadline);
+    bountyStatus.insert(bid, BountyStatus.OPEN);
+
+    lastCreatedBountyId = bid;
+    return disclose(bid);
+}
+
+// -----------------------------------------------------------------------------
+// 2) submitWork — commit only H(solution || secret)
+// -----------------------------------------------------------------------------
+export circuit submitWork(_bountyId: Bytes<32>, _submissionHash: Bytes<32>): [] {
+    assert(bountyCreator.member(_bountyId), "Unknown bounty");
+    assert(bountyStatus.lookup(_bountyId) == BountyStatus.OPEN, "Bounty not open");
+    const now = disclose(localNow());
+    assert(now <= bountyDeadline.lookup(_bountyId), "Past deadline");
+
+    const submitter = ownPublicKey();
+    const ck = commitSubmissionRecord(_bountyId, submitter, _submissionHash);
+    assert(!submissionCommits.member(ck), "Duplicate submission commit");
+    submissionCommits.insert(ck);
+}
+
+// -----------------------------------------------------------------------------
+// 3) revealWork — verify preimage against stored commit; mark revealed
+// -----------------------------------------------------------------------------
+export circuit revealWork(_bountyId: Bytes<32>, _solution: Bytes<32>, _secret: Bytes<32>): [] {
+    assert(bountyCreator.member(_bountyId), "Unknown bounty");
+    assert(bountyStatus.lookup(_bountyId) == BountyStatus.OPEN, "Bounty not open");
+    const now = disclose(localNow());
+    assert(now <= bountyDeadline.lookup(_bountyId), "Past deadline");
+
+    const submitter = ownPublicKey();
+    const recomputed = hashSolutionSecret(_solution, _secret);
+    const ck = commitSubmissionRecord(_bountyId, submitter, recomputed);
+    assert(submissionCommits.member(ck), "No matching commit");
+
+    const rtag = commitRevealTag(_bountyId, submitter);
+    assert(!revealedAttestations.member(rtag), "Already revealed");
+    revealedAttestations.insert(rtag);
+}
+
+// -----------------------------------------------------------------------------
+// 4) selectWinner — creator only; winner must have revealed
+// -----------------------------------------------------------------------------
+export circuit selectWinner(_bountyId: Bytes<32>, _winner: ZswapCoinPublicKey): [] {
+    assert(bountyCreator.member(_bountyId), "Unknown bounty");
+    assert(bountyStatus.lookup(_bountyId) == BountyStatus.OPEN, "Bounty not open");
+    assert(bountyCreator.lookup(_bountyId) == ownPublicKey(), "Not the bounty creator");
+
+    const wtag = commitRevealTag(_bountyId, _winner);
+    assert(revealedAttestations.member(wtag), "Winner has not revealed");
+
+    bountyWinner.insert(_bountyId, _winner);
+    bountyStatus.insert(_bountyId, BountyStatus.CLOSED);
+}
+
+// -----------------------------------------------------------------------------
+// 5) claimReward — winner only; TODO: transfer escrowed coins
+// -----------------------------------------------------------------------------
+export circuit claimReward(_bountyId: Bytes<32>): [] {
+    assert(bountyCreator.member(_bountyId), "Unknown bounty");
+    assert(bountyStatus.lookup(_bountyId) == BountyStatus.CLOSED, "Bounty not closed");
+    assert(bountyWinner.member(_bountyId), "No winner recorded");
+    assert(bountyWinner.lookup(_bountyId) == ownPublicKey(), "Not the winner");
+
+    // TODO: transfer bountyReward.lookup(_bountyId) to ownPublicKey() via Midnight coin API
+
+    bountyStatus.insert(_bountyId, BountyStatus.CLAIMED);
+}
