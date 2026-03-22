@@ -78,8 +78,7 @@ A platform where users solve real-world tasks and compete for rewards — **anon
 # 🏗️ ARCHITECTURE
 
 
-Frontend (Next.js + React)
-        ↓
+Frontend (Next.js + React)↓
 Wallet Auth (wagmi)
         ↓
 Backend (ElysiaJS)
